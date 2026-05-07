@@ -1,6 +1,6 @@
 {
   "name": "rock-login-v1",
-  "version": "1.0.2",
+  "version": "1.0.5",
   "main": "script.js",
   "directories": {
     "doc": "docs"

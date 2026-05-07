@@ -83,7 +83,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             const passwordInput = document.getElementById('password');
             if (!emailInput || !passwordInput) return;
 
-            const email = emailInput.value;
+            const email = emailInput.value.trim();
             const password = passwordInput.value;
 
             const btn = loginForm.querySelector('.submit-btn');
@@ -92,28 +92,41 @@ document.addEventListener('DOMContentLoaded', async () => {
             btn.innerHTML = `<span class="loader"></span> Autenticando...`;
             btn.disabled = true;
 
+            console.log(`[Login] Attempting login for ${email} on app ${targetApp.id}`);
+
             try {
-                // 1. Autenticação Primária
-                const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
-                    email,
-                    password,
-                });
+                // 1. Autenticação Primária com Timeout
+                const authPromise = supabase.auth.signInWithPassword({ email, password });
+                const authTimeout = new Promise((_, reject) => 
+                    setTimeout(() => reject(new Error('Tempo limite de login esgotado. Verifique sua conexão.')), 15000)
+                );
+
+                const { data: authData, error: authError } = await Promise.race([authPromise, authTimeout]);
 
                 if (authError) throw authError;
 
                 const user = authData.user;
+                console.log(`[Login] Primary auth success for user ${user.id}`);
 
                 // 2. Dual-Check (Validação Legada vs Centralizada)
                 btn.innerHTML = `<span class="loader"></span> Verificando acesso...`;
 
+                const accessTimeout = new Promise((_, reject) => 
+                    setTimeout(() => reject(new Error('Tempo limite na verificação de acesso.')), 10000)
+                );
+
                 // Chamadas paralelas para otimizar tempo
-                const [legacyCheck, centralCheck] = await Promise.all([
+                const checksPromise = Promise.all([
                     supabase.from('profiles').select('role').eq('id', user.id).single(),
                     supabase.rpc('check_app_access', { p_user_id: user.id, p_app_id: targetApp.id })
                 ]);
 
+                const [legacyCheck, centralCheck] = await Promise.race([checksPromise, accessTimeout]);
+
                 const legacyProfile = legacyCheck.data;
                 const hasCentralAccess = centralCheck.data;
+
+                console.log(`[Login] Access check results:`, { legacy: !!legacyProfile, central: !!hasCentralAccess });
 
                 // 3. Lógica de Segurança (Audit Mode)
                 const allowsLegacy = !!legacyProfile;
@@ -121,8 +134,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                 if (allowsLegacy && !allowsCentral) {
                     console.warn("MIGRAÇÃO: Usuário tem acesso legado mas não centralizado.");
-
-                    // Fire and forget audit - Usamos .then pois o builder do Supabase pode não ter .catch direto
                     supabase.from('app_security_audit').insert({
                         event_type: 'mismatch_detected',
                         user_id: user.id,
@@ -137,22 +148,19 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                 // 4. Conclusão do Login
                 if (!allowsLegacy && !allowsCentral) {
-                    // Logoff imediato para limpar sessão inválida no portal antes de avisar o erro
                     await supabase.auth.signOut();
-                    throw new Error(`Acesso Negado: Você não tem permissão para acessar o sistema "${targetApp.name}".`);
+                    throw new Error(`Acesso Negado: Você não tem permissão para o sistema "${targetApp.name}".`);
                 }
 
-                console.log("Login bem sucedido. Redirecionando...");
+                console.log("[Login] Redirecting to:", targetApp.url);
                 btn.innerHTML = `<span class="loader"></span> Iniciando ${targetApp.name}...`;
 
                 // Redirecionamento com sessão
                 const session = authData.session;
                 if (targetApp.url && session) {
                     const redirectUrl = new URL(targetApp.url);
-                    // Uso de chaves "sso_" para impedir que o gotrue-js devore a hash prematuramente
                     redirectUrl.hash = `sso_access=${session.access_token}&sso_refresh=${session.refresh_token}`;
 
-                    // Pequeno delay para o usuário ver o feedback de sucesso antes do redirecionamento
                     setTimeout(() => {
                         window.location.href = redirectUrl.toString();
                     }, 500);
@@ -160,11 +168,12 @@ document.addEventListener('DOMContentLoaded', async () => {
                     window.location.href = targetApp.url;
                 } else {
                     btn.innerHTML = `<span>Logado!</span>`;
-                    alert(`Sucesso! Você agora está logado no ecossistema Rock Team. (App: ${targetApp.name})`);
+                    alert(`Sucesso! Você agora está logado. (App: ${targetApp.name})`);
+                    btn.disabled = false;
                 }
 
             } catch (err) {
-                console.error(err);
+                console.error("[Login Error]", err);
                 alert(err.message || "Erro ao realizar login");
                 btn.innerHTML = originalContent;
                 btn.disabled = false;
