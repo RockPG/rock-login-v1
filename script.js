@@ -43,6 +43,18 @@ async function initializeApp() {
             targetApp.name = appData.name;
             targetApp.url = appData.url;
 
+            // Allow dynamic redirect overrides for development/port flexibility
+            const dynamicRedirect = urlParams.get('redirect');
+            if (dynamicRedirect) {
+                try {
+                    const urlObj = new URL(dynamicRedirect);
+                    targetApp.url = urlObj.toString();
+                    console.log(`[Login] Overriding targetApp.url with dynamic redirect:`, targetApp.url);
+                } catch (e) {
+                    console.warn(`[Login] Invalid dynamic redirect URL:`, dynamicRedirect);
+                }
+            }
+
             // Update UI dynamically
             document.title = `Login | ${targetApp.name}`;
             document.getElementById('app-title').textContent = targetApp.name;
